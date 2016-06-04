@@ -41,6 +41,8 @@ def serve_ctx():
             source_suffix = '.rst'
             master_doc = 'index'
         ''')
+    default_handler = signal.getsignal(signal.SIGINT)
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
     with tempdir() as tmpdir:
         c.tmpdir = tmpdir
         with open(tmpdir + '/conf.py', 'w') as fh:
@@ -48,10 +50,15 @@ def serve_ctx():
         with open(tmpdir + '/index.rst', 'w') as fh:
             fh.write(c.index_rst)
 
+        # Child process will start with ignore SIGINT
         c.proc = Process(target=main, args=(['sphinxserve', tmpdir],))
         c.proc.start()
         check_host(c.host, c.port, timeout=3)
+
+        # restore default signal handling for parent process
+        signal.signal(signal.SIGINT, default_handler)
         yield c
+        # The terminate method of the process should send SIGINT
         c.proc.terminate()
         c.proc.join()
 

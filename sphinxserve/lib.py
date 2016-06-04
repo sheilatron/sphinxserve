@@ -32,6 +32,10 @@ class Webserver(object):
         self.path, self.host, self.port = path, host, port
         self.reload_ev = reload_ev
 
+    def shutdown(self):
+        '''Shut down the gevent server'''
+        self.server.shutdown()
+
     def run(self):
         reload_js = dedent('''\
         <script type="text/javascript">
@@ -67,7 +71,7 @@ class Webserver(object):
             self.reload_ev.wait()
             self.reload_ev.clear()
 
-        run(host=self.host, port=int(self.port), server='gevent')
+        self.server = run(host=self.host, port=int(self.port), server='gevent')
 
 
 @contextmanager

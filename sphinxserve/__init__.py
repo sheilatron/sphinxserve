@@ -10,16 +10,18 @@ __author__ = 'Daniel Mizyrycki'
 import gevent.monkey
 gevent.monkey.patch_all()
 
+import os
+import sys
+import signal
+from os.path import exists
+
 from gevent.event import Event
 from gevent import spawn, joinall
 from loadconfig import Config
 from loadconfig.lib import write_file
 import logging as log
-import os
-from os.path import exists
 from sphinx import build_main
 from sphinxserve.lib import capture_streams, fs_event_ctx, Webserver
-import sys
 from textwrap import dedent
 
 
@@ -100,19 +102,26 @@ class SphinxServer(object):
         self.c = c
         self.watch_ev = Event()
         self.render_ev = Event()
+        self.shutdown = False
+
+    def shutdown(self):
+        '''Gently request all workers finish their work and cleanly shut down.
+        '''
+        self.shutdown = True
+        self.web_server.shutdown = True
 
     def serve(self):
         '''Serve web requests from path as soon docs are ready.
         Reload remote browser when updates are rendered using websockets
         '''
         host, port = self.c.socket.split(':')
-        server = Webserver(
+        self.web_server = Webserver(
             os.path.join(self.c.sphinx_path, self.c.output),
             host,
             port,
             self.render_ev
         )
-        server.run()
+        self.web_server.run()
 
     def watch(self):
         '''Watch sphinx_path signalling render when rst files change
@@ -121,6 +130,8 @@ class SphinxServer(object):
             for event in fs_ev_iter:
                 log.debug('filesystem event: {}'.format(event, event.ev_name))
                 self.watch_ev.set()
+                if self.shutdown:
+                    break
 
     def render(self):
         '''Render and listen for doc changes (watcher events)
@@ -132,6 +143,8 @@ class SphinxServer(object):
                 self.build()
             log.debug(streams.getvalue())
             self.render_ev.set()
+            if self.shutdown:
+                break
 
     def build(self):
         '''Render reStructuredText files with sphinx'''
@@ -155,6 +168,7 @@ class Prog(object):
 
     def __init__(self, c):
         self.c = c
+        self.shutdown = False
 
     def check_dependencies(self):
         '''Create sphinx conf.py and index.rst if necessary'''
@@ -200,8 +214,23 @@ class Prog(object):
         print(self.c.render('rm -f ~/bin/$app'))
 
     def serve(self):
+        '''Create the SphinxServer with the provided configuration,
+        and start it listening to events.
+
+        This method catches SIGINT signals, so it needs to call
+        sys.exit(0) after the SphinxServer shuts itself down.
+        '''
+
+        def shutdown_handler(signal, frame):
+            log.info("Received SIGNINT signal to shut down!")
+            self.shutdown = True
+            self.sphinx_server.shutdown()
+
+        signal.signal(signal.SIGINT, shutdown_handler)
         self.check_dependencies()
-        SphinxServer(self.c).manage()
+        self.sphinx_server = SphinxServer(self.c).manage()
+        log.info("Completed a clean shutdown.")
+        sys.exit(0)
 
 
 def main(args):
